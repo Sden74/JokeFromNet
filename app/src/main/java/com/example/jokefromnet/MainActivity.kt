@@ -15,7 +15,6 @@ import com.google.gson.annotations.SerializedName
 import retrofit2.Call
 import retrofit2.Response
 import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import java.net.UnknownHostException
 
@@ -30,7 +29,7 @@ class JokeApp : Application() {
             .addConverterFactory(GsonConverterFactory.create())
             .build()*/
         //viewModel = ViewModel(BaseModel(BaseJokeService(Gson()),BaseResourceManager(this)))
-        viewModel = ViewModel(TestModel(BaseResourceManager(this)))
+        viewModel = ViewModel(BaseModel(TestCacheDataSource(),TestCloudDataSource(),BaseResourceManager(this)))
         /*viewModel = ViewModel(
             BaseModel(
                 retrofit.create(JokeService::class.java),
@@ -46,14 +45,15 @@ class MainActivity : AppCompatActivity() {
         val button = findViewById<Button>(R.id.actionButton)
         val progressBar = findViewById<View>(R.id.progressBar)
         val textView = findViewById<TextView>(R.id.textView)
-        val iconView = findViewById<ImageView>(R.id.iconView)
+        val changeButton = findViewById<ImageView>(R.id.changeButton)
         val checkBox= findViewById<CheckBox>(R.id.checkBox)
         checkBox.setOnCheckedChangeListener{_,isChecked->
             viewModel.chooseFavorites(isChecked)
         }
+        changeButton.setOnClickListener{
+            viewModel.changeJokeStatus()
+        }
         progressBar.visibility = View.INVISIBLE
-
-
         button.setOnClickListener {
             button.isEnabled = false
             progressBar.visibility = View.VISIBLE
@@ -67,32 +67,33 @@ class MainActivity : AppCompatActivity() {
                 textView.text = text
             }
 
-            override fun provideIconRes(id: Int) =runOnUiThread{iconView.setImageResource(id)}
+            override fun provideIconRes(id: Int) =runOnUiThread{changeButton.setImageResource(id)}
         })
     }
-
     override fun onDestroy() {
         viewModel.clear()
         super.onDestroy()
     }
 }
 
-
+//---------------------------------------------------------------------------------
 interface DataCallback {
     fun provideText(text: String)
     fun provideIconRes(@DrawableRes id:Int)
 }
-
-class ViewModel(private val model: com.example.jokefromnet.Model) {
+interface JokeCallback {
+    fun provide(joke: Joke)
+}
+class ViewModel(private val model: Model) {
     private var dataCallback: DataCallback? = null
-
+    private val jokeCallback=object :JokeCallback{
+        override fun provide(joke: Joke) {
+            dataCallback?.let { joke.map(it) }
+        }
+    }
     fun init(callback: DataCallback) {
         dataCallback = callback
-        model.init(object : JokeCallback {
-            override fun provide(joke: Joke) {
-                dataCallback?.let { joke.map(it) }
-            }
-        })
+        model.init(jokeCallback)
     }
 
     fun getJoke() {
@@ -107,59 +108,86 @@ class ViewModel(private val model: com.example.jokefromnet.Model) {
     fun chooseFavorites(checked: Boolean) {
 
     }
-}
 
-interface JokeCallback {
-    fun provide(joke: Joke)
-}
-
-interface Model {
-    fun getJoke()
-    fun init(callback: JokeCallback)
-    fun clear()
-}
-
-interface ResultCallback {
-    fun provideSuccess(data: Joke)
-    fun provideError(data: JokeFailure)
+    fun changeJokeStatus() {
+        model.changeJokeStatus(jokeCallback)
+    }
 }
 
 
-interface UiMapper{
-    fun toUiText():String
-}
 
 
+//----------------------------JOKE_FAILURE-----------------------------------------
 interface JokeFailure{
     fun getMessage():String
 }
-
 class NoConnection(private val resourceManager: ResourceManager):JokeFailure{
     override fun getMessage(): String = resourceManager.getString(R.string.no_connection)
 }
-
 class ServiceUnavailable(private val resourceManager: ResourceManager):JokeFailure{
     override fun getMessage(): String = resourceManager.getString(R.string.service_unavailable)
 }
-
+//-------------------------------------------------------------------------------------
 interface ResourceManager{
     fun getString(@StringRes stringResId: Int):String
 }
 class BaseResourceManager(private val context: Context):ResourceManager{
     override fun getString(stringResId: Int): String = context.getString(stringResId)
 }
-
 interface JokeService{
     //fun getJoke(callback: ServiceCallback)
     @GET("https://official-joke-api.appspot.com/random_joke/")
-    fun getJoke() : retrofit2.Call<JokeDTO>
+    fun getJoke() : retrofit2.Call<JokeServerModel>
 }
 
-enum class ErrorType {
+
+//-------------------------JOKE------------------------------------------
+data class JokeServerModel(
+    @SerializedName("id")
+    private val id:Int,
+    @SerializedName("type")
+    private val type:String,
+    @SerializedName("setup")
+    private val text:String,
+    @SerializedName("punchline")
+    private val punchline:String
+){
+    fun toJoke()=BaseJoke(text,punchline)
+    fun toBaseJoke()=BaseJoke(text,punchline)
+    fun toFavoriteJoke()=FavoriteJoke(text,punchline)
+    fun change(cacheDataSource: CacheDataSource) = cacheDataSource.addOrRemove(id,this)
+}
+abstract class Joke(private val text: String,private val punchline: String){
+    fun getJokeUi()="$text\n$punchline"
+    @DrawableRes abstract fun getIconResId():Int
+
+    fun map(callback: DataCallback)=callback.run {
+        provideText(getJokeUi())
+        provideIconRes(getIconResId())
+    }
+}
+class BaseJoke(text: String,punchline: String):Joke(text, punchline){
+    override fun getIconResId() = R.drawable.baseline_favorite_border_24
+}
+class FavoriteJoke(text: String,punchline: String):Joke(text, punchline){
+    override fun getIconResId() = R.drawable.baseline_favorite_24
+}
+class FailedJoke(text: String ):Joke(text, ""){
+    override fun getIconResId() = 0
+}
+
+//----------------------------OLDS------------------------------------------------
+interface ResultCallback {
+    fun provideSuccess(data: Joke)
+    fun provideError(data: JokeFailure)
+}
+interface UiMapper{
+    fun toUiText():String
+}
+/*enum class ErrorType {
     NO_CONNECTION,
     OTHER
-}
-
+}*/
 /*class BaseModel(
     private val service: JokeService,
     private val resourceManager: ResourceManager
@@ -210,42 +238,7 @@ enum class ErrorType {
         callback=null
     }
 }*/
-
-data class JokeDTO(
-    @SerializedName("id")
-    private val id:Int,
-    @SerializedName("type")
-    private val type:String,
-    @SerializedName("setup")
-    private val text:String,
-    @SerializedName("punchline")
-    private val punchline:String
-){
-    fun toJoke()=BaseJoke(text,punchline)
-}
-
-//-------------------------JOKE------------------------------------------
-abstract class Joke(private val text: String,private val punchline: String){
-    fun getJokeUi()="$text\n$punchline"
-    @DrawableRes abstract fun getIconResId():Int
-
-    fun map(callback: DataCallback)=callback.run {
-        provideText(getJokeUi())
-        provideIconRes(getIconResId())
-    }
-}
-class BaseJoke(text: String,punchline: String):Joke(text, punchline){
-    override fun getIconResId() = R.drawable.baseline_favorite_border_24
-}
-class FavoriteJoke(text: String,punchline: String):Joke(text, punchline){
-    override fun getIconResId() = R.drawable.baseline_favorite_24
-}
-class FailedJoke(text: String ):Joke(text, ""){
-    override fun getIconResId() = 0
-}
-//----------------------------------------------------------------------------
-
-class TestModel(resourceManager: ResourceManager) : com.example.jokefromnet.Model {
+/*class TestModel(resourceManager: ResourceManager) : com.example.jokefromnet.Model {
     private var callback: JokeCallback? = null
     private var count = 0
     private val noConnection= NoConnection(resourceManager)
@@ -269,9 +262,9 @@ class TestModel(resourceManager: ResourceManager) : com.example.jokefromnet.Mode
     override fun clear() {
         callback = null
     }
-}
+}*/
 interface ServiceCallback{
-    fun returnSuccess(data:JokeDTO)
+    fun returnSuccess(data:JokeServerModel)
     fun returnError(type:ErrorType)
 }
 /*
@@ -306,3 +299,107 @@ class BaseJokeService(private val gson: Gson):JokeService{
     override fun toUiText(): String = "$text\n$punchline"
     //fun getJokeUi()="$text\n$punchline"
 }*/
+class BaseCloudDataSource(private val service: JokeService):CloudDataSource{
+    override fun getJoke(callback: JokeCloudCallback) {
+        service.getJoke().enqueue(object : retrofit2.Callback<JokeServerModel>{
+            override fun onResponse(
+                call: Call<JokeServerModel>,
+                response: Response<JokeServerModel>
+            ) {
+                if (response.isSuccessful){
+                    callback.provide(response.body()!!)
+                }else{
+                    callback.fail(ErrorType.SERVICE_UNAVAILABLE)
+                }
+            }
+
+            override fun onFailure(call: Call<JokeServerModel>, t: Throwable) {
+                if (t is UnknownHostException){
+                    callback.fail(ErrorType.NO_CONNECTION)
+                }else{
+                    callback.fail(ErrorType.SERVICE_UNAVAILABLE)
+                }
+            }
+        })
+    }
+}
+
+//--------------------------------DATASOURCES__________________________________________
+interface CacheDataSource{
+    fun addOrRemove(id: Int,joke: JokeServerModel): Joke
+}
+
+interface CloudDataSource{
+    fun getJoke(callback: JokeCloudCallback)
+}
+
+interface JokeCloudCallback{
+    fun provide(joke: JokeServerModel)
+    fun fail(error: ErrorType)
+
+}
+enum class ErrorType{
+    NO_CONNECTION,
+    SERVICE_UNAVAILABLE
+}
+
+class TestCloudDataSource:CloudDataSource{
+    override fun getJoke(callback: JokeCloudCallback) {
+        callback.provide(JokeServerModel(0,"testType","TestText","TestPunchline"))
+    }
+}
+class TestCacheDataSource : CacheDataSource{
+    private val map=HashMap<Int,JokeServerModel>()
+    override fun addOrRemove(id: Int, jokeServerModel: JokeServerModel): Joke {
+        return if (map.containsKey(id)){
+            val joke = map[id]!!.toBaseJoke()
+            map.remove(id)
+            joke
+        } else {
+            map[id] = jokeServerModel
+            jokeServerModel.toFavoriteJoke()
+        }
+    }
+}
+
+//--------------------------------MODEL-------------------------------------------------
+interface Model {
+    fun getJoke()
+    fun init(callback: JokeCallback)
+    fun clear()
+    fun changeJokeStatus(jokeCallback: JokeCallback)
+}
+class BaseModel(
+    private val cacheDataSource: CacheDataSource,
+    private val cloudDataSource: CloudDataSource,
+    private val resourceManager: ResourceManager
+):Model{
+
+    private val noConnection by lazy { NoConnection(resourceManager) }
+    private val serviceUnavailable by lazy { ServiceUnavailable(resourceManager) }
+    private var jokeCallback:JokeCallback?=null
+    private var cachedJokeServerModel:JokeServerModel?=null
+    override fun getJoke() {
+        cloudDataSource.getJoke(object :JokeCloudCallback{
+            override fun provide(joke: JokeServerModel) {
+                cachedJokeServerModel=joke
+                jokeCallback?.provide(joke.toBaseJoke())
+            }
+
+            override fun fail(error: ErrorType) {
+                cachedJokeServerModel=null
+                val failure = if(error== ErrorType.NO_CONNECTION) noConnection else serviceUnavailable
+                jokeCallback?.provide(FailedJoke(failure.getMessage()))
+            }
+        })
+    }
+    override fun changeJokeStatus(jokeCallback: JokeCallback) {
+        cachedJokeServerModel?.change(cacheDataSource)?.let { jokeCallback.provide(it) }
+    }
+    override fun init(callback: JokeCallback) {
+        jokeCallback=callback
+    }
+    override fun clear() {
+        jokeCallback=null
+    }
+}
