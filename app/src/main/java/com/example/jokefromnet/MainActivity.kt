@@ -15,6 +15,7 @@ import com.google.gson.annotations.SerializedName
 import retrofit2.Call
 import retrofit2.Response
 import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import java.net.UnknownHostException
 
@@ -24,12 +25,16 @@ class JokeApp : Application() {
     lateinit var viewModel: ViewModel
     override fun onCreate() {
         super.onCreate()
-        /*val retrofit=Retrofit.Builder()
+        val retrofit=Retrofit.Builder()
             .baseUrl("https://www.google.com")
             .addConverterFactory(GsonConverterFactory.create())
-            .build()*/
+            .build()
         //viewModel = ViewModel(BaseModel(BaseJokeService(Gson()),BaseResourceManager(this)))
-        viewModel = ViewModel(BaseModel(TestCacheDataSource(),TestCloudDataSource(),BaseResourceManager(this)))
+        viewModel = ViewModel(
+            BaseModel(
+                TestCacheDataSource(),
+                BaseCloudDataSource(retrofit.create(JokeService::class.java)),
+                BaseResourceManager(this)))
         /*viewModel = ViewModel(
             BaseModel(
                 retrofit.create(JokeService::class.java),
@@ -359,23 +364,24 @@ class TestCloudDataSource:CloudDataSource{
     }
 }
 class TestCacheDataSource : CacheDataSource{
-    private val map=HashMap<Int,JokeServerModel>()
+    private val list=ArrayList<Pair<Int,JokeServerModel>>()
     override fun addOrRemove(id: Int, jokeServerModel: JokeServerModel): Joke {
-        return if (map.containsKey(id)){
-            val joke = map[id]!!.toBaseJoke()
-            map.remove(id)
+        val found=list.find { it.first==id }
+        return if (found!=null){
+            val joke = found.second.toBaseJoke()
+            list.remove(found)
             joke
         } else {
-            map[id] = jokeServerModel
+            list.add(Pair(id ,jokeServerModel))
             jokeServerModel.toFavoriteJoke()
         }
     }
 
     override fun getJoke(jokeCachedCallback: JokeCachedCallback) {
-        if (map.isEmpty()){
+        if (list.isEmpty()){
             jokeCachedCallback.fail()
         }else{
-            jokeCachedCallback.provide(map[0]!!)
+            jokeCachedCallback.provide(list.random().second)
         }
     }
 }
@@ -411,10 +417,12 @@ class BaseModel(
         if (getJokeFromCache){
             cacheDataSource.getJoke(object : JokeCachedCallback{
                 override fun provide(jokeServerModel: JokeServerModel) {
+                    cachedJokeServerModel=jokeServerModel
                     jokeCallback?.provide(jokeServerModel.toFavoriteJoke())
                 }
 
                 override fun fail() {
+                    cachedJokeServerModel=null
                     jokeCallback?.provide(FailedJoke(noCachedJokes.getMessage()))
                 }
             })
