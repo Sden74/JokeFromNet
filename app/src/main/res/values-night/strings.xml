@@ -2,4 +2,5 @@
 <resources>
     <string name="no_connection">No internet connection</string>
     <string name="service_unavailable">Service is unavailable</string>
+    <string name="show_favorite_joke">Show favorite joke</string>
 </resources>
