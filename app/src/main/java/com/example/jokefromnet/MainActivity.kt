@@ -12,6 +12,9 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.annotation.DrawableRes
 import com.google.gson.annotations.SerializedName
+import io.realm.Realm
+import io.realm.RealmObject
+import io.realm.annotations.PrimaryKey
 import retrofit2.Call
 import retrofit2.Response
 import retrofit2.Retrofit
@@ -25,6 +28,7 @@ class JokeApp : Application() {
     lateinit var viewModel: ViewModel
     override fun onCreate() {
         super.onCreate()
+        Realm.init(this)
         val retrofit=Retrofit.Builder()
             .baseUrl("https://www.google.com")
             .addConverterFactory(GsonConverterFactory.create())
@@ -32,7 +36,7 @@ class JokeApp : Application() {
         //viewModel = ViewModel(BaseModel(BaseJokeService(Gson()),BaseResourceManager(this)))
         viewModel = ViewModel(
             BaseModel(
-                TestCacheDataSource(),
+                BaseCachedDataSource(Realm.getDefaultInstance()),
                 BaseCloudDataSource(retrofit.create(JokeService::class.java)),
                 BaseResourceManager(this)))
         /*viewModel = ViewModel(
@@ -160,6 +164,14 @@ data class JokeServerModel(
     fun toJoke()=BaseJoke(text,punchline)
     fun toBaseJoke()=BaseJoke(text,punchline)
     fun toFavoriteJoke()=FavoriteJoke(text,punchline)
+    fun toJokeRealm():JokeRealm{
+        return JokeRealm().also {
+            it.id = id
+            it.type = type
+            it.text = text
+            it.punchline = punchline
+        }
+    }
     fun change(cacheDataSource: CacheDataSource) = cacheDataSource.addOrRemove(id,this)
 }
 abstract class Joke(private val text: String,private val punchline: String){
@@ -454,5 +466,53 @@ class BaseModel(
 
     override fun chooseDataSource(cached: Boolean) {
         getJokeFromCache=cached
+    }
+}
+
+//------------------------------------REALM---------------------------------------------
+open class JokeRealm:RealmObject(){
+    @PrimaryKey
+    var id: Int=-1
+    var text:String=""
+    var punchline:String=""
+    var type:String=""
+}
+
+class BaseCachedDataSource(private val realm: Realm):CacheDataSource{
+    override fun getJoke(jokeCachedCallback: JokeCachedCallback) {
+        realm.use {
+            val jokes = it.where(JokeRealm::class.java).findAll()
+            if (jokes.isEmpty())
+                jokeCachedCallback.fail()
+            else
+                jokes.random().let { joke->
+                    jokeCachedCallback.provide(
+                        JokeServerModel(
+                            joke.id,
+                            joke.type,
+                            joke.text,
+                            joke.punchline
+                        )
+                    )
+                }
+        }
+    }
+
+    override fun addOrRemove(id: Int, jokeServerModel: JokeServerModel): Joke {
+        realm.let {
+            val jokeRealm = it.where(JokeRealm::class.java).equalTo("id",id).findFirst()
+            return if (jokeRealm==null){
+                val newJoke=jokeServerModel.toJokeRealm()
+                it.executeTransactionAsync{ transaction ->
+                    transaction.insert(newJoke)
+                }
+                jokeServerModel.toFavoriteJoke()
+            }else{
+                it.executeTransaction{
+                    jokeRealm.deleteFromRealm()
+                }
+                jokeServerModel.toBaseJoke()
+            }
+        }
     }
 }
